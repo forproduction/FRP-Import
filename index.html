@@ -1,27 +1,98 @@
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="UTF-8">
+  <title>Bagging Input</title>
   <script src="https://unpkg.com/html5-qrcode"></script>
+  <style>
+    body { font-family: Arial; max-width: 420px; margin: auto; padding: 10px; }
+    input, select, button { width: 100%; padding: 10px; margin: 6px 0; font-size: 16px; }
+    #reader { width: 100%; margin-top: 10px; }
+    .row { display:flex; gap:8px; }
+    .row input { flex:1; }
+  </style>
 </head>
 <body>
 
-<h3>Scan QR</h3>
+<h3>Bagging Input</h3>
 
-<div id="reader" style="width:300px;"></div>
+<button onclick="startScan()">📷 Quét QR</button>
+<div id="reader"></div>
 
-<input id="bagId" placeholder="Bag ID"><br><br>
+<label>Product Code</label>
+<input id="product" readonly>
+
+<div class="row">
+  <div>
+    <label>Date</label>
+    <input id="date" readonly>
+  </div>
+  <div>
+    <label>Time</label>
+    <input id="time" readonly>
+  </div>
+</div>
+
+<label>NET (kg)</label>
+<input id="net" type="number">
+
+<label>Reason</label>
+<input id="reason">
+
+<label>Mã nhân viên</label>
+<input id="emp">
+
+<button onclick="submitData()">Submit</button>
 
 <script>
-function onScanSuccess(decodedText) {
-  document.getElementById("bagId").value = decodedText;
+let scanner;
+
+// set date time realtime
+function updateDateTime() {
+  const now = new Date();
+  document.getElementById("date").value = now.toLocaleDateString();
+  document.getElementById("time").value = now.toLocaleTimeString();
+}
+setInterval(updateDateTime, 1000);
+updateDateTime();
+
+// scan QR
+function startScan() {
+  scanner = new Html5Qrcode("reader");
+  scanner.start(
+    { facingMode: "environment" },
+    { fps: 10, qrbox: 250 },
+    (decodedText) => {
+      document.getElementById("product").value = decodedText;
+      scanner.stop();
+      document.getElementById("net").focus();
+    }
+  );
 }
 
-const html5QrCode = new Html5Qrcode("reader");
-html5QrCode.start(
-  { facingMode: "environment" },
-  { fps: 10, qrbox: 250 },
-  onScanSuccess
-);
+// submit data
+function submitData() {
+  const data = {
+    product: document.getElementById("product").value,
+    date: document.getElementById("date").value,
+    time: document.getElementById("time").value,
+    net: document.getElementById("net").value,
+    reason: document.getElementById("reason").value,
+    emp: document.getElementById("emp").value
+  };
+
+  fetch("https://script.google.com/macros/s/AKfycbxKzwW13NwizYRtP1vcLsJPbILBm5WFSojbrZELHT1xGAGxprPJSgJgTPzfSXFyBKKTKQ/exec", {
+    method: "POST",
+    body: JSON.stringify(data)
+  })
+  .then(res => res.text())
+  .then(() => {
+    alert("Đã lưu!");
+    document.getElementById("net").value = "";
+    document.getElementById("reason").value = "";
+    document.getElementById("product").value = "";
+  });
+}
 </script>
 
 </body>
