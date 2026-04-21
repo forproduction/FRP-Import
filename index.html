@@ -92,6 +92,21 @@
       font-size: 13px;
     }
 
+    /* ===== PENDING BADGE ===== */
+    .pending-badge {
+      font-family: var(--sans);
+      font-size: 10px;
+      font-weight: 800;
+      color: var(--warn);
+      background: rgba(251, 191, 36, 0.1);
+      border: 1px solid rgba(251, 191, 36, 0.3);
+      padding: 3px 6px;
+      border-radius: 4px;
+      margin-left: 8px;
+      display: none;
+      letter-spacing: 1px;
+    }
+
     /* ===== MAIN ===== */
     .wrap {
       max-width: 480px;
@@ -349,6 +364,7 @@
       background: var(--accent2);
       display: inline-block;
       box-shadow: 0 0 8px var(--accent2);
+      transition: background 0.3s, box-shadow 0.3s;
       animation: blink 2s ease-in-out infinite;
     }
 
@@ -360,7 +376,6 @@
 </head>
 <body>
 
-<!-- TOP NAV -->
 <div id="topnav">
   <div class="nav-brand">FRP</div>
   <div class="nav-sub">Bagging Input</div>
@@ -369,14 +384,13 @@
       <span id="nav-time">--:--:--</span>
       <span id="nav-date" style="color:var(--muted);font-size:10px;">--/--/----</span>
     </div>
-    <span class="status-dot" style="margin-left:8px;"></span>
+    <div id="pending-status" class="pending-badge">0 PENDING</div>
+    <span class="status-dot" id="network-dot" style="margin-left:8px;"></span>
   </div>
 </div>
 
-<!-- MAIN WRAP -->
 <div class="wrap">
 
-  <!-- QR SCAN CARD -->
   <div class="card">
     <div class="section-title">QR Scanner</div>
     <button id="qr-btn" onclick="toggleScan()">
@@ -389,7 +403,6 @@
     <div id="reader"></div>
   </div>
 
-  <!-- PRODUCT INFO CARD -->
   <div class="card">
     <div class="section-title">Product</div>
 
@@ -411,7 +424,6 @@
     </div>
   </div>
 
-  <!-- DATA INPUT CARD -->
   <div class="card">
     <div class="section-title">Input Data</div>
 
@@ -436,19 +448,21 @@
     </div>
   </div>
 
-  <!-- SUBMIT -->
   <button id="submit-btn" onclick="submitData()">
     ▶ Submit
   </button>
 
 </div>
 
-<!-- TOAST -->
 <div id="toast"></div>
 
 <script>
+  const API_URL = "https://script.google.com/macros/s/AKfycbxcb6Oet6CAJl1lH1vVqat4rFEcKDatjDdmMOKax5W6e_HQo1xXBJlIT83DvTaBQ6dgTg/exec";
+  
   let scanner;
   let isScanning = false;
+  let queue = [];
+  let isSending = false;
 
   // Real-time clock
   function updateDateTime() {
@@ -518,7 +532,27 @@
     }, 3000);
   }
 
-  // Submit
+  // ================== QUEUE & LOCAL STORAGE ==================
+  function saveQueue() {
+    localStorage.setItem("frp_bagging_queue", JSON.stringify(queue));
+  }
+
+  function loadQueue() {
+    const q = localStorage.getItem("frp_bagging_queue");
+    if (q) queue = JSON.parse(q);
+  }
+
+  function updateStatus() {
+    const pendingBadge = document.getElementById("pending-status");
+    if (queue.length > 0) {
+      pendingBadge.textContent = queue.length + " PENDING";
+      pendingBadge.style.display = "inline-block";
+    } else {
+      pendingBadge.style.display = "none";
+    }
+  }
+
+  // ================== SUBMIT LOGIC ==================
   function submitData() {
     const product = document.getElementById("product").value;
     const net = document.getElementById("net").value;
@@ -527,10 +561,6 @@
     if (!product) { showToast('⚠ Vui lòng quét mã sản phẩm!', 'error'); return; }
     if (!net) { showToast('⚠ Vui lòng nhập NET (kg)!', 'error'); return; }
     if (!emp) { showToast('⚠ Vui lòng nhập mã nhân viên!', 'error'); return; }
-
-    const btn = document.getElementById('submit-btn');
-    btn.disabled = true;
-    btn.textContent = 'ĐANG LƯU...';
 
     const data = {
       product,
@@ -541,28 +571,74 @@
       emp
     };
 
-    fetch("https://script.google.com/macros/s/AKfycbxcb6Oet6CAJl1lH1vVqat4rFEcKDatjDdmMOKax5W6e_HQo1xXBJlIT83DvTaBQ6dgTg/exec", {
-      method: "POST",
-      body: JSON.stringify(data)
-    })
-    .then(res => res.text())
-    .then(() => {
-      showToast('✓ Đã lưu thành công!', 'success');
-      document.getElementById("net").value = "";
-      document.getElementById("reason").value = "";
-      document.getElementById("product").value = "";
-      const display = document.getElementById("product-display");
-      display.textContent = 'Chưa quét mã QR...';
-      display.classList.add('empty');
-    })
-    .catch(() => {
-      showToast('✕ Lỗi kết nối, thử lại!', 'error');
-    })
-    .finally(() => {
-      btn.disabled = false;
-      btn.textContent = '▶ Submit';
-    });
+    // Đẩy vào hàng đợi và lưu
+    queue.push(data);
+    saveQueue();
+    updateStatus();
+
+    // Xoá nhanh form -> không cần chờ gửi thành công
+    showToast('✓ Đã lưu vào hàng đợi!', 'success');
+    document.getElementById("net").value = "";
+    document.getElementById("reason").selectedIndex = 0;
+    document.getElementById("product").value = "";
+    const display = document.getElementById("product-display");
+    display.textContent = 'Chưa quét mã QR...';
+    display.classList.add('empty');
+
+    // Chạy tiến trình gửi ngầm
+    processQueue();
   }
+
+  // ================== BACKGROUND SEND ==================
+  async function processQueue() {
+    if (isSending) return;
+    isSending = true;
+
+    const dot = document.getElementById("network-dot");
+    dot.style.background = "var(--warn)";
+    dot.style.boxShadow = "0 0 8px var(--warn)";
+
+    while (queue.length > 0) {
+      const item = queue[0];
+
+      try {
+        await fetch(API_URL, {
+          method: "POST",
+          body: JSON.stringify(item)
+        });
+
+        queue.shift();
+        saveQueue();
+        updateStatus();
+
+      } catch (err) {
+        console.error("Lỗi mạng/gửi dữ liệu:", err);
+        // Ngừng vòng lặp nếu lỗi để thử lại sau
+        break; 
+      }
+    }
+
+    isSending = false;
+    dot.style.background = "var(--accent2)";
+    dot.style.boxShadow = "0 0 8px var(--accent2)";
+  }
+
+  // ================== INIT ==================
+  window.onload = () => {
+    loadQueue();
+    updateStatus();
+    processQueue();
+
+    // Lắng nghe sự kiện có mạng trở lại để tiếp tục gửi queue
+    window.addEventListener('online', processQueue);
+
+    // Chu kỳ retry gửi lại dữ liệu nếu còn queue (10s 1 lần)
+    setInterval(() => {
+      if (queue.length > 0 && navigator.onLine) {
+        processQueue();
+      }
+    }, 10000);
+  };
 </script>
 </body>
 </html>
